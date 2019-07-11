@@ -5,8 +5,8 @@
 ' =====================================================
 Option Explicit
 Const forAppending = 8
-dim fs, namedArgs, comspec, wShell, tempDir, lockFile, strID, maxWait, v
-v = "0.0.1"
+dim fs, namedArgs, comspec, wShell, tempDir, lockFile, strID, maxWait, logFileAbsPath, logLine, debug, v
+v = "0.0.1.001"
 
 set namedArgs = wScript.arguments.Named
 set wShell = CreateObject("wScript.Shell" )
@@ -14,13 +14,16 @@ set fs 		= CreateObject("Scripting.FileSystemObject")
 
 comspec 	= wShell.expandEnvironmentStrings("%comspec%")
 tempDir 	= wShell.expandEnvironmentStrings("%temp%")
+logFileAbsPath = fs.buildPath(tempDir, wScript.scriptName & ".log") ' need to be set before the first call to log()
 
 log("Starting version: " & v & " " & wScript.scriptName)
+logLine =  ">> """ & logFileAbsPath & """ 2>&1"
 
 Randomize()
 strID		= Rnd() & "_" & unixTime()
 lockFile 	= fs.buildPath(tempDir,strID) & ".lck"
 if namedArgs.exists("lock") then lockFile = namedArgs.item("lock")
+if namedArgs.exists("debug") then debug = 1 else debug = 0
 
 if namedArgs.exists("?") then printUsage()
 if namedArgs.exists("h") then printUsage()
@@ -36,24 +39,27 @@ log("Ending " & wScript.scriptName)
 function prepareArgs()
 	dim args, oArg	
 	for each oArg in wScript.arguments 
-		if (inStr(oArg, "/run") = 0) and _
+		if (inStr(oArg, "/log") = 0) and _
 			(inStr(oArg, "/lock") = 0) and _
 			(inStr(oArg, "/maxwait") = 0) and _
+			(inStr(oArg, "/debug") = 0) and _
 			(inStr(oArg, "/elevate") = 0) then
 			if inStr(oArg, " ") then oArg = """" & oArg & """"
 			args = args & " " & oArg
 		end if
 	next
+	if namedArgs.exists("log") then args = args & " " & logLine
 	prepareArgs = Trim(args)
 end function
 
 sub runCmd()
-	dim args
+	dim args, cORk
 	args = prepareArgs()
+	if debug then cORk = " /k" else cORk = " /c"
 	log("Executing " & args)
 	getLock()
 	CreateObject("Shell.Application").shellExecute comspec _
-		, "/c title " & strID & " && """ & args, "", "", 0
+		, cORk & " title " & strID & " && " & args, "", "", debug
 	if maxWait <> 0 then wScript.sleep 1000 ' Give cmd some ms to set the name
 	waitForProcess strID, maxWait
 	freeLock()
@@ -61,12 +67,13 @@ end sub
 
 sub elevate()
 	dim myArgs : myArgs = "/lock:""" & lockFile & """ " & prepareArgs()
+	if debug then myArgs = "/debug " & myArgs
 	on error resume next
 	CreateObject("wScript.Shell").RegRead("HKEY_USERS\s-1-5-19\") ' check if already elevated
 	If err.number <> 0 Then ' check if already elevated --> is err in case of not elevated
 		log("Elevating " & wScript.scriptName)
 		CreateObject("Shell.Application").shellExecute wScript.fullName _
-			, "" & wScript.scriptFullName & " " & myArgs, "", "runas", 0
+			, "" & wScript.scriptFullName & " " & myArgs, "", "runas", debug
 		if maxWait <> 0 then wScript.sleep 1000 ' Give elevated process some ms to set the lock
 		waitForFreeLock maxWait
 		log("Ending after elevation" & wScript.scriptName)
@@ -113,7 +120,7 @@ end function
 function log(logText)
 	dim logFile
 	if namedArgs.exists("log") then
-		Set logFile = fs.openTextFile(fs.buildPath(tempDir, wScript.scriptName & ".log"), forAppending, True)
+		Set logFile = fs.openTextFile(logFileAbsPath, forAppending, True)
 		logFile.writeLine getDateTime & ": " & logText
 		logFile.close
 	end if
